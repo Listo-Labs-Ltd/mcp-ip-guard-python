@@ -1,0 +1,57 @@
+[project]
+name = "listo-mcp-ip-guard"
+version = "0.1.0"
+description = "IP allowlist guard for MCP servers. Ships with OpenAI/ChatGPT egress IP ranges and Azure public cloud ranges for ChatGPT developer mode. Zero dependencies."
+requires-python = ">=3.10"
+license = "MIT"
+readme = "README.md"
+authors = [{ name = "Listo Labs Ltd" }]
+keywords = ["mcp", "ip-allowlist", "ip-guard", "chatgpt", "openai", "model-context-protocol", "security"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Networking :: Firewalls",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Listo-Labs-Ltd/mcp-ip-guard-python"
+Repository = "https://github.com/Listo-Labs-Ltd/mcp-ip-guard-python"
+Issues = "https://github.com/Listo-Labs-Ltd/mcp-ip-guard-python/issues"
+
+[project.optional-dependencies]
+starlette = ["starlette>=0.27"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_ip_guard"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
