@@ -13,6 +13,8 @@ __all__ = [
     "create_ip_guard",
     "OPENAI_IP_RANGES",
     "get_azure_ip_ranges",
+    "get_fastly_ip_ranges",
+    "get_anthropic_ip_ranges",
     "IpGuardMiddleware",
 ]
 
@@ -22,6 +24,20 @@ def get_azure_ip_ranges() -> tuple[str, ...]:
     from mcp_ip_guard.azure_ranges import AZURE_IP_RANGES
 
     return AZURE_IP_RANGES
+
+
+def get_fastly_ip_ranges() -> tuple[str, ...]:
+    """Lazy accessor for Fastly CDN IP ranges."""
+    from mcp_ip_guard.fastly_ranges import FASTLY_IP_RANGES
+
+    return FASTLY_IP_RANGES
+
+
+def get_anthropic_ip_ranges() -> tuple[str, ...]:
+    """Lazy accessor for Anthropic (Claude) outbound IP ranges."""
+    from mcp_ip_guard.anthropic_ranges import ANTHROPIC_IP_RANGES
+
+    return ANTHROPIC_IP_RANGES
 
 
 def IpGuardMiddleware(  # noqa: N802

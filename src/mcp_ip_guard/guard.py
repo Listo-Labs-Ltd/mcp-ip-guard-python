@@ -30,6 +30,12 @@ class IpGuardOptions:
         include_azure_ranges: Include Microsoft Azure public cloud IP ranges.
             Enable for ChatGPT developer mode where requests route through Azure.
             Default False.
+        include_fastly_ranges: Include Fastly CDN public IP ranges. OpenAI uses
+            Fastly as their edge CDN — in ChatGPT developer mode, requests may
+            arrive from Fastly edge IPs (e.g. 140.248.x.x). Default False.
+        include_anthropic_ranges: Include Anthropic (Claude) outbound IP ranges.
+            Enable when your MCP server receives tool calls from Claude.
+            Default False.
         additional_ranges: Extra CIDR ranges or single IPs to allow.
             Single IPs without a prefix are treated as /32.
         allow_localhost_in_dev: Allow localhost when not in production. Default True.
@@ -47,6 +53,8 @@ class IpGuardOptions:
 
     include_openai_ranges: bool = True
     include_azure_ranges: bool = False
+    include_fastly_ranges: bool = False
+    include_anthropic_ranges: bool = False
     additional_ranges: Sequence[str] = field(default_factory=list)
     allow_localhost_in_dev: bool = True
     trusted_proxy_depth: int = 1
@@ -107,6 +115,14 @@ class IpGuard:
             from mcp_ip_guard.azure_ranges import AZURE_IP_RANGES
 
             all_ranges.extend(AZURE_IP_RANGES)
+        if opts.include_fastly_ranges:
+            from mcp_ip_guard.fastly_ranges import FASTLY_IP_RANGES
+
+            all_ranges.extend(FASTLY_IP_RANGES)
+        if opts.include_anthropic_ranges:
+            from mcp_ip_guard.anthropic_ranges import ANTHROPIC_IP_RANGES
+
+            all_ranges.extend(ANTHROPIC_IP_RANGES)
         for r in opts.additional_ranges:
             all_ranges.append(_normalise_cidr(r))
 
@@ -234,6 +250,8 @@ def create_ip_guard(
     *,
     include_openai_ranges: bool = True,
     include_azure_ranges: bool = False,
+    include_fastly_ranges: bool = False,
+    include_anthropic_ranges: bool = False,
     additional_ranges: Sequence[str] = (),
     allow_localhost_in_dev: bool = True,
     trusted_proxy_depth: int = 1,
@@ -266,6 +284,8 @@ def create_ip_guard(
         IpGuardOptions(
             include_openai_ranges=include_openai_ranges,
             include_azure_ranges=include_azure_ranges,
+            include_fastly_ranges=include_fastly_ranges,
+            include_anthropic_ranges=include_anthropic_ranges,
             additional_ranges=list(additional_ranges),
             allow_localhost_in_dev=allow_localhost_in_dev,
             trusted_proxy_depth=trusted_proxy_depth,

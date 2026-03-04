@@ -1,6 +1,6 @@
 [project]
 name = "listo-mcp-ip-guard"
-version = "0.2.0"
+version = "0.3.0"
 description = "IP allowlist guard for MCP servers. Ships with OpenAI/ChatGPT egress IP ranges and Azure public cloud ranges for ChatGPT developer mode. Zero dependencies."
 requires-python = ">=3.10"
 license = "MIT"

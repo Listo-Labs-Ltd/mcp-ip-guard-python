@@ -42,6 +42,8 @@ class IpGuardMiddleware:
         protected_paths: Sequence[str] = ("/mcp", "/mcp/messages"),
         include_openai_ranges: bool = True,
         include_azure_ranges: bool = False,
+        include_fastly_ranges: bool = False,
+        include_anthropic_ranges: bool = False,
         additional_ranges: Sequence[str] = (),
         allow_localhost_in_dev: bool = True,
         trusted_proxy_depth: int = 1,
@@ -55,6 +57,8 @@ class IpGuardMiddleware:
             IpGuardOptions(
                 include_openai_ranges=include_openai_ranges,
                 include_azure_ranges=include_azure_ranges,
+                include_fastly_ranges=include_fastly_ranges,
+                include_anthropic_ranges=include_anthropic_ranges,
                 additional_ranges=list(additional_ranges),
                 allow_localhost_in_dev=allow_localhost_in_dev,
                 trusted_proxy_depth=trusted_proxy_depth,

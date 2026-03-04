@@ -109,6 +109,69 @@ class TestAzureRanges:
         assert with_azure.range_count > base.range_count + 5000
 
 
+class TestAnthropicRanges:
+    def test_not_included_by_default(self) -> None:
+        guard = create_ip_guard(
+            include_openai_ranges=False,
+            allow_localhost_in_dev=False,
+        )
+        # 160.79.104.0/21 covers 160.79.104.0 - 160.79.111.255
+        assert guard.is_allowed("160.79.106.42") is False
+
+    def test_allows_anthropic_ips_when_enabled(self) -> None:
+        guard = create_ip_guard(
+            include_anthropic_ranges=True,
+            allow_localhost_in_dev=False,
+        )
+        assert guard.is_allowed("160.79.104.1") is True
+        assert guard.is_allowed("160.79.111.254") is True
+
+    def test_adds_on_top_of_openai(self) -> None:
+        guard = create_ip_guard(
+            include_anthropic_ranges=True,
+            allow_localhost_in_dev=False,
+        )
+        assert guard.is_allowed("52.173.123.5") is True  # OpenAI
+        assert guard.is_allowed("160.79.106.42") is True  # Anthropic
+
+    def test_increases_range_count(self) -> None:
+        base = create_ip_guard()
+        with_anthropic = create_ip_guard(include_anthropic_ranges=True)
+        assert with_anthropic.range_count == base.range_count + 1
+
+
+class TestFastlyRanges:
+    def test_not_included_by_default(self) -> None:
+        guard = create_ip_guard(
+            include_openai_ranges=False,
+            allow_localhost_in_dev=False,
+        )
+        # 140.248.67.158 is a Fastly IP — should be blocked without the flag
+        assert guard.is_allowed("140.248.67.158") is False
+
+    def test_allows_fastly_ips_when_enabled(self) -> None:
+        guard = create_ip_guard(
+            include_fastly_ranges=True,
+            allow_localhost_in_dev=False,
+        )
+        # 140.248.64.0/18 covers 140.248.64.0 - 140.248.127.255
+        assert guard.is_allowed("140.248.67.158") is True
+        assert guard.is_allowed("140.248.67.124") is True
+
+    def test_adds_on_top_of_openai(self) -> None:
+        guard = create_ip_guard(
+            include_fastly_ranges=True,
+            allow_localhost_in_dev=False,
+        )
+        assert guard.is_allowed("52.173.123.5") is True  # OpenAI
+        assert guard.is_allowed("140.248.67.158") is True  # Fastly
+
+    def test_increases_range_count(self) -> None:
+        base = create_ip_guard()
+        with_fastly = create_ip_guard(include_fastly_ranges=True)
+        assert with_fastly.range_count == base.range_count + 19
+
+
 class TestLocalhostHandling:
     def test_allows_localhost_in_non_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENVIRONMENT", "development")
@@ -190,9 +253,7 @@ class TestGetClientIp:
 
     def test_trusted_proxy_depth_clamps_to_list_length(self) -> None:
         """If depth exceeds XFF entries, use the leftmost (first) entry."""
-        ip = IpGuard.get_client_ip_from_headers(
-            "10.0.0.1", "only_one_ip", trusted_proxy_depth=5
-        )
+        ip = IpGuard.get_client_ip_from_headers("10.0.0.1", "only_one_ip", trusted_proxy_depth=5)
         assert ip == "only_one_ip"
 
     def test_trusted_proxy_depth_via_guard(self) -> None:
