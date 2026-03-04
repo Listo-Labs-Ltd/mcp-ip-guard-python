@@ -36,6 +36,10 @@ class IpGuardOptions:
             Checks the environment variable ``ENVIRONMENT`` (or ``NODE_ENV`` as
             fallback) — localhost is only bypassed when the value is NOT
             ``"production"``.
+        trusted_proxy_depth: Number of trusted reverse proxies in front of the
+            application. The client IP is extracted from
+            ``X-Forwarded-For[-depth]``. Default 1 (single proxy like Railway
+            or Cloudflare). Set to 2 for CDN -> Load Balancer -> App, etc.
         debug: Log blocked IPs to stdout. Default False.
         on_blocked: Optional callback ``(client_ip, path) -> None`` invoked when
             a request is blocked. Useful for recording telemetry.
@@ -45,11 +49,12 @@ class IpGuardOptions:
     include_azure_ranges: bool = False
     additional_ranges: Sequence[str] = field(default_factory=list)
     allow_localhost_in_dev: bool = True
+    trusted_proxy_depth: int = 1
     debug: bool = False
     on_blocked: Callable[[str, str], None] | None = None
 
 
-_LOCALHOST_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
+_LOCALHOST_ADDRS = frozenset({"127.0.0.1", "::1"})
 
 
 def _is_production() -> bool:
@@ -83,7 +88,13 @@ class IpGuard:
         client_ip = guard.get_client_ip(request)
     """
 
-    __slots__ = ("_networks", "_allow_localhost_in_dev", "_debug", "_on_blocked")
+    __slots__ = (
+        "_networks",
+        "_allow_localhost",
+        "_trusted_proxy_depth",
+        "_debug",
+        "_on_blocked",
+    )
 
     def __init__(self, options: IpGuardOptions | None = None) -> None:
         opts = options or IpGuardOptions()
@@ -108,7 +119,9 @@ class IpGuard:
                 logger.warning("Skipping invalid CIDR: %s", cidr)
         self._networks: tuple[ipaddress.IPv4Network, ...] = tuple(networks)
 
-        self._allow_localhost_in_dev = opts.allow_localhost_in_dev
+        # Evaluate production check once at init time, not on every request
+        self._allow_localhost = opts.allow_localhost_in_dev and not _is_production()
+        self._trusted_proxy_depth = max(1, opts.trusted_proxy_depth)
         self._debug = opts.debug
         self._on_blocked = opts.on_blocked
 
@@ -119,20 +132,27 @@ class IpGuard:
 
     def is_allowed(self, ip: str) -> bool:
         """Check if a raw IP address string is in the allowlist."""
-        # Localhost bypass for development
-        if self._allow_localhost_in_dev and not _is_production():
-            if ip in _LOCALHOST_ADDRS:
-                return True
+        stripped = ip.strip()
 
-        # Handle IPv6-mapped IPv4 (e.g. ::ffff:52.173.123.5)
-        ipv4_str = ip
-        if ip.startswith("::ffff:"):
-            ipv4_str = ip[7:]
+        # Localhost bypass for development (evaluated once at init)
+        if self._allow_localhost and stripped in _LOCALHOST_ADDRS:
+            return True
 
+        # Normalise via ipaddress to handle all IPv6-mapped-IPv4 forms
+        # (e.g. ::ffff:1.2.3.4, ::FFFF:1.2.3.4, ::ffff:102:304)
         try:
-            addr = ipaddress.IPv4Address(ipv4_str)
-        except (ipaddress.AddressValueError, ValueError):
-            return False  # Invalid IPv4 -> deny
+            parsed = ipaddress.ip_address(stripped)
+        except ValueError:
+            return False  # Unparseable -> deny
+
+        # Extract the IPv4 address (handles IPv4-mapped IPv6 transparently)
+        if isinstance(parsed, ipaddress.IPv6Address):
+            mapped = parsed.ipv4_mapped
+            if mapped is None:
+                return False  # Pure IPv6 not supported -> deny
+            addr = mapped
+        else:
+            addr = parsed
 
         for network in self._networks:
             if addr in network:
@@ -143,17 +163,21 @@ class IpGuard:
     def get_client_ip_from_headers(
         remote_addr: str | None,
         x_forwarded_for: str | None,
+        trusted_proxy_depth: int = 1,
     ) -> str:
         """Extract client IP from raw header values.
 
-        Uses the **rightmost** IP in X-Forwarded-For because that is the
-        entry added by the trusted edge proxy (e.g. Railway, Cloudflare)
-        and cannot be spoofed by the client.
+        Uses ``X-Forwarded-For[-trusted_proxy_depth]`` to select the IP
+        added by the outermost trusted proxy. With a single proxy (the
+        default), this is the rightmost entry. With two proxies (e.g.
+        CDN -> Load Balancer -> App), use ``trusted_proxy_depth=2`` to
+        skip the inner proxy's entry.
         """
         if x_forwarded_for:
             ips = [ip.strip() for ip in x_forwarded_for.split(",") if ip.strip()]
             if ips:
-                return ips[-1]
+                idx = min(trusted_proxy_depth, len(ips))
+                return ips[-idx]
         return remote_addr or "unknown"
 
     def get_client_ip(self, scope: dict[str, object]) -> str:
@@ -179,7 +203,7 @@ class IpGuard:
         client: tuple[str, int] | None = actual_scope.get("client")  # type: ignore[assignment]
         remote = client[0] if client else None
 
-        return self.get_client_ip_from_headers(remote, xff)
+        return self.get_client_ip_from_headers(remote, xff, self._trusted_proxy_depth)
 
     def check_request(
         self,
@@ -196,7 +220,10 @@ class IpGuard:
                 logger.info("[mcp-ip-guard] Blocked IP: %s on %s", client_ip, path)
 
             if self._on_blocked:
-                self._on_blocked(client_ip, path)
+                try:
+                    self._on_blocked(client_ip, path)
+                except Exception:
+                    logger.exception("on_blocked callback failed for %s", client_ip)
 
             return GuardResult(allowed=False, client_ip=client_ip)
 
@@ -209,6 +236,7 @@ def create_ip_guard(
     include_azure_ranges: bool = False,
     additional_ranges: Sequence[str] = (),
     allow_localhost_in_dev: bool = True,
+    trusted_proxy_depth: int = 1,
     debug: bool = False,
     on_blocked: Callable[[str, str], None] | None = None,
 ) -> IpGuard:
@@ -240,6 +268,7 @@ def create_ip_guard(
             include_azure_ranges=include_azure_ranges,
             additional_ranges=list(additional_ranges),
             allow_localhost_in_dev=allow_localhost_in_dev,
+            trusted_proxy_depth=trusted_proxy_depth,
             debug=debug,
             on_blocked=on_blocked,
         )

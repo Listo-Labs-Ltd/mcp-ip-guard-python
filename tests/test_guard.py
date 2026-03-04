@@ -32,10 +32,24 @@ class TestIsAllowed:
         assert guard.is_allowed("::ffff:52.173.123.5") is True
         assert guard.is_allowed("::ffff:8.8.8.8") is False
 
+    def test_handles_ipv6_mapped_ipv4_uppercase(self) -> None:
+        guard = create_ip_guard(allow_localhost_in_dev=False)
+        assert guard.is_allowed("::FFFF:52.173.123.5") is True
+        assert guard.is_allowed("::FFFF:8.8.8.8") is False
+
+    def test_denies_pure_ipv6(self) -> None:
+        guard = create_ip_guard(allow_localhost_in_dev=False)
+        assert guard.is_allowed("2001:db8::1") is False
+
     def test_denies_invalid_formats(self) -> None:
         guard = create_ip_guard(allow_localhost_in_dev=False)
         assert guard.is_allowed("not-an-ip") is False
         assert guard.is_allowed("") is False
+
+    def test_strips_whitespace(self) -> None:
+        guard = create_ip_guard(allow_localhost_in_dev=False)
+        assert guard.is_allowed(" 52.173.123.5 ") is True
+        assert guard.is_allowed(" 8.8.8.8 ") is False
 
     def test_allows_additional_custom_ranges(self) -> None:
         guard = create_ip_guard(
@@ -101,7 +115,6 @@ class TestLocalhostHandling:
         guard = create_ip_guard()
         assert guard.is_allowed("127.0.0.1") is True
         assert guard.is_allowed("::1") is True
-        assert guard.is_allowed("localhost") is True
 
     def test_blocks_localhost_in_production(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENVIRONMENT", "production")
@@ -119,6 +132,20 @@ class TestLocalhostHandling:
         monkeypatch.setenv("NODE_ENV", "production")
         guard = create_ip_guard()
         assert guard.is_allowed("127.0.0.1") is False
+
+    def test_localhost_string_is_not_bypassed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The literal string 'localhost' should NOT be in the bypass set."""
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        guard = create_ip_guard()
+        assert guard.is_allowed("localhost") is False
+
+    def test_production_check_evaluated_at_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_is_production() is captured at init, not re-evaluated per request."""
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        guard = create_ip_guard()
+        # Changing env after init should NOT affect the guard
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        assert guard.is_allowed("127.0.0.1") is True  # still uses init-time value
 
 
 class TestGetClientIp:
@@ -154,6 +181,32 @@ class TestGetClientIp:
         }
         assert guard.get_client_ip(scope) == "10.0.0.1"
 
+    def test_trusted_proxy_depth_2(self) -> None:
+        """With depth=2, picks XFF[-2] to skip the inner proxy."""
+        ip = IpGuard.get_client_ip_from_headers(
+            "10.0.0.1", "client_ip, cdn_ip, lb_ip", trusted_proxy_depth=2
+        )
+        assert ip == "cdn_ip"
+
+    def test_trusted_proxy_depth_clamps_to_list_length(self) -> None:
+        """If depth exceeds XFF entries, use the leftmost (first) entry."""
+        ip = IpGuard.get_client_ip_from_headers(
+            "10.0.0.1", "only_one_ip", trusted_proxy_depth=5
+        )
+        assert ip == "only_one_ip"
+
+    def test_trusted_proxy_depth_via_guard(self) -> None:
+        """trusted_proxy_depth is passed through to get_client_ip."""
+        guard = create_ip_guard(trusted_proxy_depth=2)
+        scope = {
+            "type": "http",
+            "client": ("10.0.0.1", 12345),
+            "headers": [
+                (b"x-forwarded-for", b"real_client, proxy1, proxy2"),
+            ],
+        }
+        assert guard.get_client_ip(scope) == "proxy1"
+
 
 class TestCheckRequest:
     def test_returns_allowed_for_openai_ip(self) -> None:
@@ -175,6 +228,20 @@ class TestCheckRequest:
         )
         guard.check_request("8.8.8.8", "/mcp")
         assert blocked == [("8.8.8.8", "/mcp")]
+
+    def test_on_blocked_exception_does_not_propagate(self) -> None:
+        """A crashing on_blocked callback should not prevent the 403."""
+
+        def bad_callback(ip: str, path: str) -> None:
+            raise RuntimeError("callback crash")
+
+        guard = create_ip_guard(
+            allow_localhost_in_dev=False,
+            on_blocked=bad_callback,
+        )
+        result = guard.check_request("8.8.8.8", "/mcp")
+        assert result.allowed is False
+        assert result.client_ip == "8.8.8.8"
 
 
 class TestRangeCount:

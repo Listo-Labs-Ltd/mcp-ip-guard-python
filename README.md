@@ -40,6 +40,10 @@ guard = create_ip_guard(
     # Allow localhost in non-production (default: True)
     allow_localhost_in_dev=True,
 
+    # Number of trusted reverse proxies (default: 1)
+    # Uses X-Forwarded-For[-depth] to extract the client IP
+    trusted_proxy_depth=1,
+
     # Log blocked IPs (default: False)
     debug=False,
 
@@ -60,9 +64,9 @@ Check if a raw IP address string is in the allowlist.
 
 ### `guard.get_client_ip(scope) -> str`
 
-Extract the client IP from an ASGI scope dict or Starlette/FastAPI Request. Uses the rightmost `X-Forwarded-For` entry (trusted proxy IP, cannot be spoofed).
+Extract the client IP from an ASGI scope dict or Starlette/FastAPI Request. Uses `X-Forwarded-For[-trusted_proxy_depth]` to select the IP added by the outermost trusted proxy.
 
-### `guard.get_client_ip_from_headers(remote_addr, x_forwarded_for) -> str`
+### `guard.get_client_ip_from_headers(remote_addr, x_forwarded_for, trusted_proxy_depth=1) -> str`
 
 Extract client IP from raw header values. Static method.
 
@@ -105,7 +109,17 @@ app.add_middleware(
 )
 ```
 
-The middleware only guards the specified `protected_paths`. All other paths pass through unblocked.
+The middleware guards both HTTP and WebSocket connections on the specified `protected_paths`. All other paths pass through unblocked. Paths are normalized (trailing slashes stripped) before matching.
+
+With multi-proxy setup (e.g. CDN -> Load Balancer -> App):
+
+```python
+app.add_middleware(
+    IpGuardMiddleware,
+    protected_paths=["/mcp", "/mcp/messages"],
+    trusted_proxy_depth=2,  # skip the inner proxy's XFF entry
+)
+```
 
 ## Usage with Python MCP Server
 
@@ -136,6 +150,18 @@ guard = create_ip_guard(include_azure_ranges=True)
 ```
 
 This adds ~10,360 Azure IPv4 CIDR ranges to the allowlist. Only enable this when you need developer-mode compatibility — in production with ChatGPT's public integration, the default OpenAI ranges are sufficient.
+
+## Reverse Proxy Configuration
+
+The guard extracts the client IP from the `X-Forwarded-For` header using `trusted_proxy_depth` to select the correct entry. The default (`1`) works for single-proxy deployments (e.g. Railway, Cloudflare, or a single load balancer).
+
+| Deployment | Depth | XFF example | Extracted IP |
+|---|---|---|---|
+| Single proxy (Cloudflare -> App) | 1 | `client, cloudflare` | `cloudflare` entry = client IP added by Cloudflare |
+| Two proxies (CDN -> LB -> App) | 2 | `client, cdn, lb` | `cdn` entry = client IP added by CDN |
+| Direct (no proxy) | 1 | _(empty)_ | Falls back to `remote_addr` |
+
+Set `trusted_proxy_depth` to match the number of trusted reverse proxies in front of your application. An incorrect value means the guard checks the wrong IP.
 
 ## Environment
 

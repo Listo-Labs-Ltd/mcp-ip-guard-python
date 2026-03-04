@@ -44,17 +44,20 @@ class IpGuardMiddleware:
         include_azure_ranges: bool = False,
         additional_ranges: Sequence[str] = (),
         allow_localhost_in_dev: bool = True,
+        trusted_proxy_depth: int = 1,
         debug: bool = False,
         on_blocked: Callable[[str, str], None] | None = None,
     ) -> None:
         self.app = app
-        self.protected_paths = set(protected_paths)
+        # Normalize protected paths: strip trailing slashes for consistent matching
+        self.protected_paths = {p.rstrip("/") or "/" for p in protected_paths}
         self.guard = IpGuard(
             IpGuardOptions(
                 include_openai_ranges=include_openai_ranges,
                 include_azure_ranges=include_azure_ranges,
                 additional_ranges=list(additional_ranges),
                 allow_localhost_in_dev=allow_localhost_in_dev,
+                trusted_proxy_depth=trusted_proxy_depth,
                 debug=debug,
                 on_blocked=on_blocked,
             )
@@ -66,11 +69,14 @@ class IpGuardMiddleware:
         receive: object,
         send: object,
     ) -> None:
-        if scope.get("type") != "http":
+        scope_type = scope.get("type")
+        if scope_type not in ("http", "websocket"):
             await self.app(scope, receive, send)  # type: ignore[operator]
             return
 
-        path: str = scope.get("path", "")  # type: ignore[assignment]
+        # Normalize path: strip trailing slashes to match protected_paths
+        raw_path: str = scope.get("path", "")  # type: ignore[assignment]
+        path = raw_path.rstrip("/") or "/"
         if path not in self.protected_paths:
             await self.app(scope, receive, send)  # type: ignore[operator]
             return
@@ -79,6 +85,12 @@ class IpGuardMiddleware:
         result = self.guard.check_request(client_ip, path)
 
         if not result.allowed:
+            if scope_type == "websocket":
+                # WebSocket: accept then immediately close with 1008 (Policy Violation)
+                await receive()  # type: ignore[operator]  # consume the ws connect
+                await send({"type": "websocket.close", "code": 1008})  # type: ignore[operator]
+                return
+
             body = json.dumps(
                 {
                     "error": "Access denied",
